@@ -9,7 +9,13 @@ from topic import add_topic
 from topic import del_topic
 
 ################################################################################
-def producer_perf_test(topic, args):
+def producer_perf_test(topic, producers, args):
+    """To perform producer performance test.
+    Args:
+        topic (str): Name of topic.
+        producers (int): Number of producers.
+        args (argparse.Namespace): Arguments.
+    """
     cmd_list = [
         os.path.join(args.dirname, 'kafka-producer-perf-test.sh'),
         f'--topic {topic}',
@@ -25,8 +31,8 @@ def producer_perf_test(topic, args):
     command = ' '.join(cmd_list)
 
     result = []
-    pool = Pool(processes=clients)
-    for _ in range(clients):
+    pool = Pool(processes=producers)
+    for _ in range(producers):
         result.append(
             pool.apply_async(
                 func=subprocess.run,
@@ -71,7 +77,13 @@ def producer_perf_test(topic, args):
                      f'{rec_per_sec},{bytes_per_sec},{latency}\n')
 
 ################################################################################
-def consumer_perf_test(topic, args):
+def consumer_perf_test(topic, consumers, args):
+    """To perform consumer performance test.
+    Args:
+        topic (str): Name of topic.
+        consumers (int): Number of consumers.
+        args (argparse.Namespace): Arguments.
+    """
     command = ' '.join([
         os.path.join(args.dirname, 'kafka-consumer-perf-test.sh'),
         f'--broker-list={",".join(args.brokers)}',
@@ -80,8 +92,8 @@ def consumer_perf_test(topic, args):
     ])
 
     result = []
-    pool = Pool(processes=clients)
-    for _ in range(clients):
+    pool = Pool(processes=consumers)
+    for _ in range(consumers):
         result.append(
             pool.apply_async(
                 func=subprocess.run,
@@ -185,9 +197,9 @@ if args.clients:
         partitions=args.partitions,
         replication_factor=args.replication_factor,
     ))
-    
-    producer_perf_test(topic, args)
-    consumer_perf_test(topic, args)
+
+    producer_perf_test(topic, args.clients, args)
+    consumer_perf_test(topic, args.clients, args)
 
     del_topic(argparse.Namespace(
         command='del',
@@ -200,8 +212,8 @@ else:
         topic = f'topic{clients}'
         print('='*10, topic, '='*10)
 
-        producer_perf_test(topic, args)
-        consumer_perf_test(topic, args)
+        producer_perf_test(topic, clients, args)
+        consumer_perf_test(topic, clients, args)
 
         print()
         del_topic(argparse.Namespace(
