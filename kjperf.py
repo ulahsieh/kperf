@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import argparse
 import numpy as np
-import os
+import os.path
 import subprocess
 
 from multiprocessing import Pool
@@ -68,7 +68,8 @@ def producer_perf_test(topic, producers, args):
                     latencies.append(float(part.split(' ')[0]))
             latency = np.mean(np.array(latencies).astype(float))
     print(f'    Records:    {records}')
-    print(f'    Throughput: {rec_per_sec:.2f} rec/sec ({bytes_per_sec:.2f} MB/sec)')
+    print(f'    Throughput: {rec_per_sec:.2f} rec/sec '
+          f'({bytes_per_sec:.2f} MB/sec)')
     print(f'    Latency:    {latency:.2f} mS')
 
     if args.csv_filepath:
@@ -118,106 +119,113 @@ def consumer_perf_test(topic, consumers, args):
             rec_per_sec += float(parts[5]) # nMsg.sec
             mega_bytes_per_sec += float(parts[3]) # MB.sec
     print(f'    Records:    {records}')
-    print(f'    Throughput: {rec_per_sec:.2f} rec/sec ({mega_bytes_per_sec:.2f} MB/sec)')
+    print(f'    Throughput: {rec_per_sec:.2f} rec/sec '
+          f'({mega_bytes_per_sec:.2f} MB/sec)')
 
 ################################################################################
-parser = argparse.ArgumentParser(
-    description='Kafka Java performance test.', 
-    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument('-b', '--brokers', 
-    type=str, nargs='+', default=['localhost'],
-    help='Kafka borker host[:port]. The default port is 9092.')
-parser.add_argument('-d', '--dirname', 
-    type=str, default='/home/nexgus/Downloads/kafka_2.12-2.4.1/bin',
-    help='Path to Kafka bin directory.')
-parser.add_argument('-i', '--iterations', 
-    type=int, default=50000, 
-    help='Record generation count for each client.')
-parser.add_argument('-ds', '--data-size',
-    type=int, default=100,
-    help='Data size for each record.')
-parser.add_argument('-a', '--acks',
-    choices=['0', '1', 'all'], default='1',
-    help='The number of acknowledgments the producer requires the leader '
-         'to have received before considering a request complete. This '
-         'controls the durability of records that are sent. The '
-         'following settings are common: 0: Producer will not wait for '
-         'any acknowledgment from the server. 1: Wait for leader to '
-         'write the record to its local log only. all: Wait for the full '
-         'set of in-sync replicas to write the record.')
-parser.add_argument('-pp', '--producer-props',
-    type=str, nargs='+',
-    help='Additional producer properties other than acks and bootstrap.servers.')
-parser.add_argument('-c', '--clients',
-    type=int,
-    help='Client count.')
-parser.add_argument('-pt', '--partitions',
-    type=int,
-    help='Partition count.')
-parser.add_argument('-m', '--max', 
-    type=int, default=2, 
-    help='Maximum client count.')
-parser.add_argument('-rf', '--replication-factor',
-    type=int, default=1,
-    help='Replcation factor if the topic does not exist.')
-parser.add_argument('-csv', '--csv-filepath',
-    type=str,
-    help='Path to a CSV file.')
-args = parser.parse_args()
+def main(args):
+    if args.csv_filepath:
+        with open(args.csv_filepath, 'w') as fp:
+            fp.write('Type,Records,Clients,Iterations,RecPerSec,'
+                     'MegaBytesPerSec,Latency\n')
 
-if args.clients:
-    if args.partitions is None:
-        raise ValueError('When clients is set, partitions must be set.')
-    if args.clients < 1:
-        raise ValueError('Minimum value of clients is 1.')
-    if args.partitions < 1:
-        raise ValueError('Minimum value of clients is 1.')
-
-brokers = []
-for broker in args.brokers:
-    if ':' not in broker:
-        broker = broker + ':9092'
-    brokers.append(broker)
-args.brokers = brokers
-
-################################################################################
-if args.csv_filepath:
-    with open(args.csv_filepath, 'w') as fp:
-        fp.write('Type,Records,Clients,Iterations,RecPerSec,MegaBytesPerSec,'
-                 'Latency\n')
-
-if args.clients:
-    topic = f'topic{args.clients}-{args.partitions}-{args.replication_factor}'
-    print('='*10, topic, '='*10)
-
-    add_topic(argparse.Namespace(
-        command='add',
-        broker=args.brokers[0],
-        topic=topic,
-        partitions=args.partitions,
-        replication_factor=args.replication_factor,
-    ))
-
-    producer_perf_test(topic, args.clients, args)
-    consumer_perf_test(topic, args.clients, args)
-
-    del_topic(argparse.Namespace(
-        command='del',
-        broker=args.brokers[0],
-        topics=[topic]
-    ))
-
-else:
-    for clients in range(1, args.max+1):
-        topic = f'topic{clients}'
+    if args.clients:
+        topic = (f'topic{args.clients}-{args.partitions}-'
+                 f'{args.replication_factor}')
         print('='*10, topic, '='*10)
 
-        producer_perf_test(topic, clients, args)
-        consumer_perf_test(topic, clients, args)
+        add_topic(argparse.Namespace(
+            command='add',
+            broker=args.brokers[0],
+            topic=topic,
+            partitions=args.partitions,
+            replication_factor=args.replication_factor,
+        ))
 
-        print()
+        producer_perf_test(topic, args.clients, args)
+        consumer_perf_test(topic, args.clients, args)
+
         del_topic(argparse.Namespace(
             command='del',
             broker=args.brokers[0],
             topics=[topic]
         ))
+
+    else:
+        for clients in range(1, args.max+1):
+            topic = f'topic{clients}'
+            print('='*10, topic, '='*10)
+
+            producer_perf_test(topic, clients, args)
+            consumer_perf_test(topic, clients, args)
+
+            print()
+            del_topic(argparse.Namespace(
+                command='del',
+                broker=args.brokers[0],
+                topics=[topic]
+            ))
+
+################################################################################
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Kafka Java performance test.', 
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('-b', '--brokers', 
+        type=str, nargs='+', default=['localhost'],
+        help='Kafka borker host[:port]. The default port is 9092.')
+    parser.add_argument('-d', '--dirname', 
+        type=str, default='/home/nexgus/Downloads/kafka_2.12-2.4.1/bin',
+        help='Path to Kafka bin directory.')
+    parser.add_argument('-i', '--iterations', 
+        type=int, default=50000, 
+        help='Record generation count for each client.')
+    parser.add_argument('-ds', '--data-size',
+        type=int, default=100,
+        help='Data size for each record.')
+    parser.add_argument('-a', '--acks',
+        choices=['0', '1', 'all'], default='1',
+        help='The number of acknowledgments the producer requires the leader '
+             'to have received before considering a request complete. This '
+             'controls the durability of records that are sent. The '
+             'following settings are common: 0: Producer will not wait for '
+             'any acknowledgment from the server. 1: Wait for leader to '
+             'write the record to its local log only. all: Wait for the full '
+             'set of in-sync replicas to write the record.')
+    parser.add_argument('-pp', '--producer-props',
+        type=str, nargs='+',
+        help='Additional producer properties other than acks and '
+             'bootstrap.servers.')
+    parser.add_argument('-c', '--clients',
+        type=int,
+        help='Client count.')
+    parser.add_argument('-pt', '--partitions',
+        type=int,
+        help='Partition count.')
+    parser.add_argument('-m', '--max', 
+        type=int, default=2, 
+        help='Maximum client count.')
+    parser.add_argument('-rf', '--replication-factor',
+        type=int, default=1,
+        help='Replcation factor if the topic does not exist.')
+    parser.add_argument('-csv', '--csv-filepath',
+        type=str,
+        help='Path to a CSV file.')
+    args = parser.parse_args()
+
+    if args.clients:
+        if args.partitions is None:
+            raise ValueError('When clients is set, partitions must be set.')
+        if args.clients < 1:
+            raise ValueError('Minimum value of clients is 1.')
+        if args.partitions < 1:
+            raise ValueError('Minimum value of clients is 1.')
+
+    brokers = []
+    for broker in args.brokers:
+        if ':' not in broker:
+            broker = broker + ':9092'
+        brokers.append(broker)
+    args.brokers = brokers
+
+    main(args)
