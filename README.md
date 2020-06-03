@@ -1,4 +1,6 @@
 # Kafka Java Performance Test
+
+## Introduction
 Since the performance test tools of Kafka is hard to use, I program this tool 
 to perform test.
 
@@ -6,13 +8,13 @@ to perform test.
 1.  Python 3.5+
 1.  kafka-python
 
-## Examples
-### Common Conditions:
+## Common Conditions for Examples:
 -   Kafka bin dirpath: /opt/kafka/bin
 -   Iterations (records per client): 50000000
 -   Data Size: 100 bytes
 -   acks: 1  
 
+## Examples
 1.  Broker: kafka.broker.1:9092  
     Partitions: 3  
     Clients: 3  
