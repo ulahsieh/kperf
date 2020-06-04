@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import numpy as np
+import os
 import time
 
 from kafka import KafkaConsumer
@@ -9,15 +9,16 @@ from multiprocessing import Pool
 
 ################################################################################
 VER_MAJOR = 0
-VER_MINOR = 1
+VER_MINOR = 2
 VER_PATCH = 0
 
 ################################################################################
 def consume(idx, brokers, topic, partitions):
     consumer = KafkaConsumer(
         bootstrap_servers=brokers,
-        client_id=f'nexgus-consumer-{idx+1}',
-        group_id='nexgus-consumer-group',
+        client_id=f'perf-consumer-{idx+1}',
+        group_id='perf-consumer-group',
+        auto_offset_reset='earliest',
         consumer_timeout_ms=1000,
     )
 
@@ -36,19 +37,19 @@ def consume(idx, brokers, topic, partitions):
     consumer.assign([tp])
     consumer.seek_to_beginning(tp)
 
-    t_list = []
+    t0 = time.time()
+    rec = 0
     while True:
-        t0 = time.time()
         try:
             consumer.next_v2()
+            rec += 1
         except StopIteration:
             break
-        else:
-            t = time.time() - t0
-            t_list.append(t)
+
+    t = time.time() - t0 - 1 # since we waited for 1000mS for timeout
     consumer.close()
 
-    return t_list
+    return idx, t, rec
 
 ################################################################################
 def validate_args(args):
@@ -58,7 +59,6 @@ def validate_args(args):
 
 ###############################################################################
 def main(args):
-    print('Consuming...', end='')
     args = validate_args(args)
 
     # Check if the topic in cluster
@@ -71,8 +71,8 @@ def main(args):
     partitions = c.partitions_for_topic(args.topic)
     partitions = len(partitions)
     c.close()
-    del c
 
+    t0 = time.time()
     result = []
     pool = Pool(processes=args.consumers)
     for idx in range(args.consumers):
@@ -89,45 +89,39 @@ def main(args):
         )
     pool.close()
     pool.join()
+    t1 = time.time() - t0
 
-    total_rec = 0
+    records = 0
     rec_per_sec = 0.0
-    t = np.array([])
-    for idx, ret in enumerate(result):
-        t_list = ret.get()
-        if len(t_list) == 0: continue
-        t_list = np.array(t_list).astype(float)
-        total_rec += t_list.size
-        rec_per_sec += t_list.size / np.sum(t_list)
-        t = np.concatenate((t, t_list))
-    t = t * 1000 # Convert to milliseconds
-
-    avg = np.mean(t)
-    std = np.std(t)
-    pr50 = np.percentile(t, 50)
-    pr95 = np.percentile(t, 95)
-    pr99 = np.percentile(t, 99)
-    pr999 = np.percentile(t, 99.9)
+    for ret in result:
+        idx, t, rec = ret.get()
+        throughput_rec = rec / t
+        if args.show_each:
+            print('-'*50)
+            print(f'perf-consumer-{idx+1}:')
+            print(f'    Records:    {rec}')
+            print(f'    Elapse:     {t:.3f} sec')
+            print(f'    Throughput: {throughput_rec:.2f} rec/sec')
+        records += rec
+        rec_per_sec += throughput_rec
 
     if args.csv_filepath:
+        dirname = os.path.dirname(args.csv_filepath)
+        if dirname: os.makedirs(dirname, exist_ok=True)
+        if not os.path.exists(args.csv_filepath):
+            with open(args.csv_filepath, 'w') as fp:
+                fp.write('Type,Topic,Partitions,Clients,Acks,RecPerCli,'
+                         'RcvdRec,RecPerSec\n')
         with open(args.csv_filepath, 'a') as fp:
-            fp.write(f'consumer,,{args.consumers},'
-                     f',{total_rec},,'
-                     f'{partitions},{rec_per_sec},{avg},{std},{pr50},{pr95},'
-                     f'{pr99},{pr999}\n')
+            fp.write(f'producer,{args.topic},{partitions},'
+                     f'{args.consumers},,,{records},'
+                     f'{rec_per_sec}')
 
-    print()
-    print(f'TotalRecords: {total_rec}')
-    print(f'Throughput:   {rec_per_sec:.2f} rec/sec')
-    print(f'Mean Latency: {avg:.2f}±{std:.2f} mS')
-    print( 'Percentile:')
-    print(f'  50%:   {pr50:.2f} mS')
-    print(f'  95%:   {pr95:.2f} mS')
-    print(f'  99%:   {pr99:.2f} mS')
-    print(f'  99.9%: {pr999:.2f} mS')
-    print()
-
-    
+    print('='*50)
+    print(f'Consumer:')
+    print(f'    Records:    {records}')
+    print(f'    Elapse:     {t1:.3f} sec')
+    print(f'    Throughput: {rec_per_sec:.2f} rec/sec')
 
 ###############################################################################
 if __name__ == '__main__':
@@ -150,6 +144,9 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--consumers',
         type=int, default=1,
         help='Consumer count.')
+    parser.add_argument('--show-each',
+        action='store_true',
+        help='Show metric of each producer.')
     parser.add_argument('-csv', '--csv-filepath',
         type=str,
         help='Path to a CSV file.')

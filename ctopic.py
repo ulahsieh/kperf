@@ -1,60 +1,72 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-from kafka import KafkaAdminClient
-from kafka import KafkaConsumer
-from kafka import TopicPartition
-from kafka.admin import NewTopic
-from kafka.errors import UnknownTopicOrPartitionError
+from confluent_kafka import Consumer
+from confluent_kafka import TopicPartition
+from confluent_kafka.admin import AdminClient
+from confluent_kafka.admin import NewTopic
 
 ################################################################################
 def add_topic(args):
-    admin = KafkaAdminClient(bootstrap_servers=[args.broker])
-    admin.create_topics([
-        NewTopic(
-            name=args.topic, 
-            num_partitions=args.partitions, 
-            replication_factor=args.replication_factor, 
-        ),
-    ])
-    admin.close()
+    new_topic = NewTopic(
+        topic=args.topic,
+        num_partitions=args.partitions,
+        replication_factor=args.replication_factor,
+    )
+    admin = AdminClient({'bootstrap.servers': f'{args.broker}',})
+    status = admin.create_topics([new_topic])
+    while status[args.topic].running(): pass
 
 ################################################################################
 def del_topic(args):
-    admin = KafkaAdminClient(bootstrap_servers=[args.broker])
-    try:
-        admin.delete_topics(topics=args.topics)
-    except UnknownTopicOrPartitionError:
-        pass
-    admin.close()
+    admin = AdminClient({'bootstrap.servers': f'{args.broker}',})
+    status = admin.delete_topics(topics=args.topics)
+    while True:
+        counter = 0
+        for topic in args.topics:
+            if status[topic].done(): counter += 1
+        if counter == len(args.topics):
+            break
 
 ################################################################################
 def desc_topic(args):
-    consumer = KafkaConsumer(bootstrap_servers=[args.broker])
-    topics = consumer.topics()
-    if args.topic not in topics:
-        consumer.close()
+    c = Consumer({
+        'bootstrap.servers': f'{args.broker}',
+        'group.id': 'confluent-kafka-describe-topic',
+    })
+    topics = c.list_topics().topics
+
+    if args.topic not in topics.keys():
         print(f'Topic "{args.topic}" not in cluster.')
     else:
-        partitions = consumer.partitions_for_topic(args.topic)
-        tp_list = []
-        for p in partitions:
-            tp = TopicPartition(args.topic, p)
-            tp_list.append(tp)
-        beginning_offsets = consumer.beginning_offsets(tp_list)
-        end_offsets = consumer.end_offsets(tp_list)
-
-        print(f'Topic: {args.topic}')
+        topic_metadata = topics[args.topic]
+        partitions, leaders, replicas, isrs = [], [], [], []
+        for metadata in topic_metadata.partitions.values():
+            partitions.append(str(metadata.id))
+            leaders.append(str(metadata.leader))
+            replicas.append(str(metadata.replicas))
+            isrs.append(str(metadata.isrs))
+        partitions = ', '.join(partitions)
+        leaders    = ', '.join(leaders)
+        replicas   = ', '.join(replicas)
+        isrs       = ', '.join(isrs)
+        print(f'Topic:     {topic_metadata.topic}')
         print(f'Partition: {partitions}')
-        print(f'Beginning Offsets: {list(beginning_offsets.values())}')
-        print(f'End Offsets: {list(end_offsets.values())}')
+        print(f'Leader:    {leaders}')
+        print(f'Replica:   {replicas}')
+        print(f'ISRs:      {isrs}')
+
+    c.close()
 
 ################################################################################
 def list_topics(args):
-    consumer = KafkaConsumer(bootstrap_servers=[args.broker])
-    topics = consumer.topics()
-    consumer.close()
+    c = Consumer({
+        'bootstrap.servers': f'{args.broker}',
+        'group.id': 'confluent-kafka-list-topic',
+    })
+    metadata = c.list_topics()
+    c.close()
 
-    for topic in topics:
+    for topic in metadata.topics.keys():
         print(topic)
 
 ################################################################################
@@ -68,7 +80,6 @@ def main(args):
     func = funcs[args.command]
     func(args)
 
-################################################################################
 ################################################################################
 if __name__ == '__main__':
     import argparse
@@ -103,10 +114,10 @@ if __name__ == '__main__':
     cmd_add.add_argument('topic',
         type=str, 
         help='Topic.')
-    cmd_add.add_argument('--partitions',
+    cmd_add.add_argument('-pt', '--partitions',
         type=int, default=1, 
         help='Partition count.')
-    cmd_add.add_argument('--replication-factor',
+    cmd_add.add_argument('-rf', '--replication-factor',
         type=int, default=1, 
         help='Replication factor.')
 
@@ -114,8 +125,8 @@ if __name__ == '__main__':
         type=str,
         help='Broker.')
     cmd_del.add_argument('topics',
-        type=str, nargs='+', 
-        help='Topics.')
+        type=str, nargs='+',
+        help='Topic.')
 
     cmd_desc.add_argument('broker',
         type=str,

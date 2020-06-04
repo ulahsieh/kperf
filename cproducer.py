@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# sed -i 's/\x0//g' producer.py
 import random
 import os
 import string
 import time
 
-from kafka import KafkaAdminClient
-from kafka import KafkaConsumer
-from kafka import KafkaProducer
-from kafka.admin import NewTopic
+from confluent_kafka import Consumer
+from confluent_kafka import Producer
+from confluent_kafka.admin import AdminClient
+from confluent_kafka.admin import NewTopic
 from multiprocessing import Pool
+from ctopic import add_topic
 
 ################################################################################
 VER_MAJOR = 0
@@ -29,27 +29,26 @@ def create_topic(brokers, topic, partition_count=1, replica_count=1):
         replica_count (int): Specified replication factor (default 1).
 
     Returns:
-        partitions (set): A set including partition number.
+        partitions (list): A set including partition number.
 
     """
-    consumer = KafkaConsumer(bootstrap_servers=brokers)
-    topics = consumer.topics()
+    c = Consumer({'bootstrap.servers': ','.join(brokers), 'group.id': 'a_consumer'})
+    topics = c.list_topics().topics
+    c.close()
 
-    if topic in topics:
-        partitions = consumer.partitions_for_topic(topic)
-        consumer.close()
+    if topic in topics.keys():
+        partitions = list(topics[topic].partitions.keys())
     else:
-        consumer.close()
-        admin = KafkaAdminClient(bootstrap_servers=brokers)
-        admin.create_topics([
-            NewTopic(
-                name=topic, 
-                num_partitions=partition_count, 
-                replication_factor=replica_count, 
-            ),
-        ])
-        admin.close()
-        partitions = set([p for p in range(partition_count)])
+        new_topic = NewTopic(
+            topic=topic,
+            num_partitions=partition_count,
+            replication_factor=replica_count,
+        )
+        admin = AdminClient({'bootstrap.servers': ','.join(brokers),})
+        status = admin.create_topics([new_topic])
+        while status[topic].done()==False:
+            pass
+        partitions = [p for p in range(partition_count)]
 
     return partitions
 
@@ -60,48 +59,37 @@ def produce(idx, brokers, topic, partitions,
     random.seed(int(time.time()*1000000))
     source = string.ascii_letters + string.digits
 
-    partitions = list(partitions)
+    cfg = {
+        'bootstrap.servers': ','.join(brokers),
+        'client.id': f'perf-producer-{idx+1}',
+        'acks': acks,
+    }
+    producer = Producer(**cfg)
 
-    producer = KafkaProducer(
-        bootstrap_servers=brokers,
-        client_id='perf-producer-{idx+1}',
-        acks=acks,
-    )
-
-    # Assign start partition.
-    if len(partitions) == 1:
-        pidx = 0
-    elif idx < len(partitions):
-        pidx = idx
-    else:
-        pidx = idx % len(partitions)
-
+    retries = 0
     t0 = time.time()
     for iteration in range(iterations):
-        # Generate payload
         payload = ''.join(random.choice(source) for _ in range(size))
         payload = payload.encode('utf-8')
 
-        # Here we simulate a RoundRobinPartitioner since kafka-python
-        # doesn't support it.
-        partition = partitions[pidx]
-        pidx += 1
-        if pidx >= len(partitions): pidx = 0
-
-        future = producer.send(
-            topic=topic, 
-            value=payload,
-            partition=partition,
-        )
-        if is_sync:
-            future.get()
+        ok = False
+        while True:
+            try:
+                producer.produce(topic, value=payload)
+            except BufferError:
+                ok = False
+            else:
+                ok = True
+            if ok: break
+            producer.poll(0)
+            retries += 1
+        if is_sync: 
+            producer.poll()
 
     producer.flush()
-    producer.close()
-
     t = time.time() - t0
 
-    return idx, t
+    return idx, t, retries
 
 ################################################################################
 def validate_args(args):
@@ -124,10 +112,10 @@ def main(args):
     args = validate_args(args)
 
     partitions = create_topic(
-        args.brokers, 
-        args.topic, 
-        args.partitions, 
-        args.replication_factor
+        brokers=args.brokers, 
+        topic=args.topic, 
+        partition_count=args.partitions, 
+        replica_count=args.replication_factor
     )
 
     t0 = time.time()
@@ -154,18 +142,22 @@ def main(args):
     t1 = time.time() - t0
 
     records = 0
-    rec_per_sec = 0.0
+    rec_per_sec  = 0.0
+    total_retries = 0
     for ret in result:
-        idx, t = ret.get()
+        idx, t, retries = ret.get()
         sent = args.iterations
         throughput_rec = sent / t
+        throughput_bytes = args.data_size * sent / t
         if args.show_each:
             print('-'*50)
             print(f'perf-producer-{idx+1}:')
             print(f'    Records:    {sent}')
+            print(f'    Retries:    {retries}')
             print(f'    Elapse:     {t:.3f} sec')
             print(f'    Throughput: {throughput_rec:.2f} rec/sec')
         records += sent
+        total_retries += retries
         rec_per_sec += throughput_rec
 
     if args.csv_filepath:
@@ -183,10 +175,11 @@ def main(args):
     print('-'*50)
     print('Producer:')
     print(f'    Records:    {records}')
+    print(f'    Retries:    {total_retries}')
     print(f'    Elapse:     {t1:.3f} sec')
     print(f'    Throughput: {rec_per_sec:.2f} rec/sec')
 
-###############################################################################
+################################################################################
 if __name__ == '__main__':
     import argparse
 
@@ -243,7 +236,7 @@ if __name__ == '__main__':
         help='Data size for each message.')
     parser.add_argument('--show-each',
         action='store_true',
-        help='Show metric of each producer.')
+        help='Show metrics of each producer.')
     parser.add_argument('-csv', '--csv-filepath',
         type=str,
         help='Path to a CSV file.')
