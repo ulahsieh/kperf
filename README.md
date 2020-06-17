@@ -5,8 +5,18 @@ Since the performance test tools of Kafka is hard to use, I program this tool
 to perform test.
 
 ## Prerequisties
-1.  Python 3.5+
-1.  kafka-python
+1.  Python 3.7
+2.  kafka-python
+3.  numpy
+
+## use virtualenv to seperate the execute environment
+1. sudo apt update
+2. sudo apt install -y virtualenv
+3. virtualenv -p python3.7 kafkatest
+4. cd kafkatest
+5. source bin/activate
+6. pip3 install kafka-python
+7. pip3 install numpy
 
 ## Common Conditions for Examples:
 -   Kafka bin dirpath: /opt/kafka/bin
